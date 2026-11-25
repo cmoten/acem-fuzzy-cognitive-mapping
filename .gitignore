@@ -1,1 +1,6 @@
 *.xlsx
+
+# Ignore Python virtual environment and Excel files
+env/
+*.xlsx
+*.xls
