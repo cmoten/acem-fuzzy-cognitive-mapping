@@ -1,0 +1,5 @@
+Based on FSDM by Brian Gregor, Oregon Systems Analytics LLC.
+Copyright 2016 Oregon Department of Transportation.
+Copyright 2019 Brian Gregor.
+The Python implementation adapts the R simulation equations and adds AECM
+workbook ingestion, validation, and tabular outputs.
