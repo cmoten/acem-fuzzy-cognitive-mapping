@@ -1,0 +1,73 @@
+---
+title: "FSDM-Methodology"
+author: "Cardy Moten"
+format: html
+editor: visual
+---
+
+# FSDM computation methodology
+
+The Fuzzy System Dynamics Model (FSDM) simulates how an intervention propagates through a directed network of concepts. This document describes the Python solver in `fsdm.py`, based on Brian Gregor’s R implementation. Gregor’s `calcInitChange()`, `calcPosteriorRatio()`, `calcEffects()`, and `solveModel()` correspond to the scheduling, link propagation, aggregation, and convergence steps below.
+
+## Model inputs and scaling
+
+Each concept has a baseline and may have an intervention target. Each directed link has a signed weight $w_{ij}$ from source $i$ to receiver $j$. Positive weights transmit changes in the same direction, negative weights reverse them, and zero indicates no link. Weights are supplied as model inputs in $\left[-1,1\right]$. The JSON loader converts fuzzy labels to magnitudes (VL = 0.01, L = 0.20, ML = 0.35, M = 0.50, MH = 0.67, H = 0.85, VH = 1.00) and applies the link’s sign.
+
+The scenario loader maps each concept’s declared minimum and maximum linearly to the internal operating range, which defaults to 0.01–99.99. Baselines and targets use this mapping. During propagation, the solver uses 0 and 100 as the mathematical bounds and requires every state to stay strictly between them. Scenario outputs include internal values and values converted back to declared units.
+
+## 1. Apply one intervention increment
+
+Record the baseline as increment zero. At the start of each subsequent increment, let $x$ be the current value of a driven concept, $T$ its target, and $k$ the number of remaining increments, including the current one. Apply one of these updates:
+
+| Schedule | New value |
+| --- | --- |
+| Linear | $x + \frac{\left(T-x\right)}{k}$ |
+| Exponential | $x\left(\frac{T}{x}\right)^{\frac{1}{k}}$ |
+
+Concepts without targets receive no direct change. The new-to-old ratios from this step seed propagation. Each increment starts from the state left by the preceding increment, so the schedule adapts to feedback. Driven concepts also receive network effects and can finish away from their requested targets.
+
+## 2. Calculate the effect of each link
+
+Let $c_0$ and $c_1$ be the source values before and after its most recent change. Convert that change to a signed fraction of the distance available in the direction of movement:
+
+| Source movement | Normalized change $q_i$ |
+| --- | --- |
+| Rising or unchanged | $\frac{\left(c_1-c_0\right)}{\left(100-c_0\right)}$ |
+| Falling | $\frac{\left(c_1-c_0\right)}{c_0}$ |
+
+Multiply the normalized change by the signed weight to obtain $e_{ij}=w_{ij}q_i$. For a receiver at current value $r_j$, the link contributes the following absolute change in internal units:
+
+| Link effect | Contribution $d_{ij}$ |
+| --- | --- |
+|$e_{ij}>0$ | $e_{ij}(100-r_j)$ |
+| $e_{ij}\leq0$ | $e_{ij}r_j$ |
+
+For example, a source rising from 20 to 40 uses $\frac{20}{80}=0.25$ of its upward headroom. With a weight of +0.5 and a receiver at 60, the receiver gains $0.5\times0.25\times40=5$ points from that link.
+
+## 3. Combine incoming effects and test convergence
+
+Calculate all links from the same iteration state, then update each receiver simultaneously:
+
+$$
+r_j^{\mathrm{new}}=r_j+\sum_i d_{ij}.
+$$
+
+Gregor’s R code expresses the same calculation in ratios. Each link yields a receiver ratio of $1+\frac{d_{ij}}{r_j}$. `calcEffects()` sums the deviations from 1, adds 1, then multiplies by the current receiver value.
+
+Use the ratios of updated values to previous values as inputs for the next propagation pass. This carries effects through indirect paths and feedback loops. Stop the inner loop when the maximum absolute relative change across all concepts, expressed as a percentage, falls below the tolerance:
+
+$$
+100\left(\max_j\left|\frac{r_j^{\mathrm{new}}}{r_j}-1\right|\right) < \text{tolerance}.
+$$
+
+The defaults are a 0.01% tolerance and up to 100 propagation passes per increment. A pass that leaves the open interval (0, 100) raises an error. If an increment reaches the iteration limit without meeting the tolerance, the solver records it as unconverged and carries its last state forward. Check every increment’s convergence flag before interpreting final values.
+
+## Relationship to the slide
+
+The slide presents a multiplicative variant with explicit causal and receiving sensitivity factors. Gregor’s executable R code uses additive aggregation and computes level-dependent effects through the source normalization and receiver headroom described above. A +20% and a +30% receiver effect combine to +50% under the additive rule. Compounding the two factors gives +56% before applying any separate receiver sensitivity.
+
+The Python solver follows the executable R rules. Its model inputs expose signed weights, and the source and receiver scaling is built into the propagation equation. The slide’s elasticity equation describes a way to interpret weights using relative changes. In this implementation, weight estimation is separate from simulation.
+
+## Outputs and references
+
+The scenario runner returns a trajectory with the baseline and each increment endpoint, diagnostics with the iteration count and convergence measure for each increment, and a summary of baseline-to-final changes. See [`fsdm.py`](fsdm.py#L350) for the solver and [`FSDM.md`](FSDM.md) for setup, model files, and usage examples.
